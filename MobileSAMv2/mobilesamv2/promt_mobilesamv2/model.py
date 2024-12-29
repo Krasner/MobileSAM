@@ -1,3 +1,5 @@
+# import sys
+# sys.path.append("/home/autotool/third_party/MobileSAM/MobileSAMv2/ultralytics")
 from ultralytics.yolo.cfg import get_cfg
 from ultralytics.yolo.engine.exporter import Exporter
 from ultralytics.yolo.engine.model import YOLO

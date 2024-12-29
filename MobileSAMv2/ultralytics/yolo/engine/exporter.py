@@ -210,6 +210,8 @@ class Exporter:
         self.file = file
         self.output_shape = tuple(y.shape) if isinstance(y, torch.Tensor) else \
             tuple(tuple(x.shape if isinstance(x, torch.Tensor) else []) for x in y)
+        
+        # breakpoint()
         self.pretty_name = Path(self.model.yaml.get('yaml_file', self.file)).stem.replace('yolo', 'YOLO')
         trained_on = f'trained on {Path(self.args.data).name}' if self.args.data else '(untrained)'
         description = f'Ultralytics {self.pretty_name} model {trained_on}'
@@ -312,6 +314,11 @@ class Exporter:
                 dynamic['output1'] = {0: 'batch', 2: 'mask_height', 3: 'mask_width'}  # shape(1,32,160,160)
             elif isinstance(self.model, DetectionModel):
                 dynamic['output0'] = {0: 'batch', 1: 'anchors'}  # shape(1,25200,85)
+
+        if self.args.force_detect:
+            output_names.remove("output1")
+
+        print(f"{output_names=}")
 
         torch.onnx.export(
             self.model.cpu() if dynamic else self.model,  # --dynamic only compatible with cpu

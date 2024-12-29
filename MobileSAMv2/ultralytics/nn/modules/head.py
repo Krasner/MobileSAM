@@ -96,7 +96,8 @@ class Segment(Detect):
         x = self.detect(self, x)
         if self.training:
             return x, mc, p
-        return (torch.cat([x, mc], 1), p) if self.export else (torch.cat([x[0], mc], 1), (x[1], mc, p))
+        # return (torch.cat([x, mc], 1), p) if self.export else (torch.cat([x[0], mc], 1), (x[1], mc, p))
+        return torch.cat([x, mc], 1) if self.export else (torch.cat([x[0], mc], 1), (x[1], mc, p))
 
 
 class Pose(Detect):
