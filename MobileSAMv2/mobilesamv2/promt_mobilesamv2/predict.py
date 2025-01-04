@@ -20,6 +20,7 @@ class PromptModelPredictor(DetectionPredictor):
             h, dtype=torch.float, device=boxes.device), boxes[:, 3])  # y2
         return boxes
     def postprocess(self, preds, img, orig_imgs):
+        print(f"{preds[0].shape=}")
         p = ops.non_max_suppression(preds[0],
                                     self.args.conf,
                                     self.args.iou,
@@ -27,6 +28,8 @@ class PromptModelPredictor(DetectionPredictor):
                                     max_det=self.args.max_det,
                                     nc=len(self.model.names),
                                     classes=self.args.classes)
+        
+        print(f"{p[0].shape=}")
         results = []
         if len(p) == 0 or len(p[0]) == 0:
             print("No object detected.")

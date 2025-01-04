@@ -157,6 +157,7 @@ class Exporter:
 
         # Load PyTorch model
         self.device = select_device('cpu' if self.args.device is None else self.args.device)
+        LOGGER.info(f"using device: {self.device}")
         if self.args.half and onnx and self.device.type == 'cpu':
             LOGGER.warning('WARNING ⚠️ half=True only compatible with GPU export, i.e. use device=0')
             self.args.half = False
@@ -326,10 +327,11 @@ class Exporter:
             f,
             verbose=False,
             opset_version=opset_version,
-            do_constant_folding=True,  # WARNING: DNN inference with torch>=1.12 may require do_constant_folding=False
+            do_constant_folding=False,  # WARNING: DNN inference with torch>=1.12 may require do_constant_folding=False
             input_names=['images'],
             output_names=output_names,
-            dynamic_axes=dynamic or None)
+            dynamic_axes=dynamic or None,
+            operator_export_type=torch.onnx.OperatorExportTypes.ONNX_ATEN_FALLBACK)
 
         # Checks
         model_onnx = onnx.load(f)  # load onnx model
@@ -694,7 +696,7 @@ class Exporter:
         # Create subgraph info
         subgraph = _metadata_fb.SubGraphMetadataT()
         subgraph.inputTensorMetadata = [input_meta]
-        subgraph.outputTensorMetadata = [output1, output2] if self.model.task == 'segment' else [output1]
+        subgraph.outputTensorMetadata = [output1, output2] if self.model.task == 'segment' and (not self.args.force_detect) else [output1]
         model_meta.subgraphMetadata = [subgraph]
 
         b = flatbuffers.Builder(0)
