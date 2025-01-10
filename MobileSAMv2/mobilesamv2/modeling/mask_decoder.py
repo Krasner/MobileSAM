@@ -8,7 +8,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from typing import List, Tuple, Type
+from typing import List, Tuple, Type, Union
 
 from .common import LayerNorm2d
 
@@ -68,13 +68,22 @@ class MaskDecoder(nn.Module):
             transformer_dim, iou_head_hidden_dim, self.num_mask_tokens, iou_head_depth
         )
         # self.mask_han=None
+    @torch.jit.ignore
+    def _get_slice(self, flag):
+        if flag:
+            mask_slice = slice(1, None)
+        else:
+            mask_slice = slice(0, 1)
+        
+        return mask_slice
+    
     def forward(
         self,
         image_embeddings: torch.Tensor,
         image_pe: torch.Tensor,
         sparse_prompt_embeddings: torch.Tensor,
         dense_prompt_embeddings: torch.Tensor,
-        multimask_output: bool,
+        multimask_output: Union[bool, torch.Tensor] = False,
         simple_type=False,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -92,7 +101,7 @@ class MaskDecoder(nn.Module):
           torch.Tensor: batched predicted masks
           torch.Tensor: batched predictions of mask quality
         """
-        if (simple_type==False):
+        if not simple_type:
             masks, iou_pred = self.predict_masks(
                 image_embeddings=image_embeddings,
                 image_pe=image_pe,
@@ -106,12 +115,35 @@ class MaskDecoder(nn.Module):
                 sparse_prompt_embeddings=sparse_prompt_embeddings,
                 dense_prompt_embeddings=dense_prompt_embeddings,
             )
+        # if multimask_output:
+        #     mask_slice = slice(1, None)
+        # else:
+        #     mask_slice = slice(0, 1)
+        # masks = masks[:, mask_slice, :, :]
+        # iou_pred = iou_pred[:, mask_slice]
+        
+        # if isinstance(multimask_output, torch.Tensor):
+        #     multimask_output.to(torch.bool)
+
         if multimask_output:
-            mask_slice = slice(1, None)
+            masks = masks[:, 1:, :, :]
+            iou_pred = iou_pred[:, 1:]
         else:
-            mask_slice = slice(0, 1)
-        masks = masks[:, mask_slice, :, :]
-        iou_pred = iou_pred[:, mask_slice]
+            masks = masks[:, 0:1, :, :]
+            iou_pred = iou_pred[:, 0:1]
+            # masks = masks[:,0,:,:].unsqueeze(1)
+            # iou_pred = iou_pred[:, 0].unsqueeze(1)
+
+        # print(f"{masks.shape=}")
+
+        # mask_slice = self._get_slice(multimask_output)
+        # if multimask_output:
+        #     mask_slice = slice(1, 4)
+        # else:
+        #     mask_slice = slice(0, 1)
+        # masks = masks[:, mask_slice, :, :]
+        # iou_pred = iou_pred[:, mask_slice]
+
         return masks, iou_pred
 
     def predict_masks(
@@ -125,12 +157,24 @@ class MaskDecoder(nn.Module):
         # Concatenate output tokens
         output_tokens = torch.cat([self.iou_token.weight, self.mask_tokens.weight], dim=0)
         
+        print(f"{sparse_prompt_embeddings.shape=}")
         output_tokens = output_tokens.unsqueeze(0).expand(sparse_prompt_embeddings.size(0), -1, -1)
         tokens = torch.cat((output_tokens, sparse_prompt_embeddings), dim=1)
+
+        print(f"{image_embeddings.device=}")
+        print(f"{tokens.device=}")
+        print(f"{tokens.shape=}")
         # Expand per-image data in batch direction to be per-mask
-        src = torch.repeat_interleave(image_embeddings, tokens.shape[0], dim=0)
+        if tokens.shape[0] > 1:
+            src = torch.repeat_interleave(image_embeddings, tokens.shape[0], dim=0)
+        else:
+            src = image_embeddings
         src = src + dense_prompt_embeddings
-        pos_src = torch.repeat_interleave(image_pe, tokens.shape[0], dim=0)
+        if tokens.shape[0] > 1:
+            pos_src = torch.repeat_interleave(image_pe, tokens.shape[0], dim=0)
+        else:
+            pos_src = image_pe
+
         b, c, h, w = src.shape
 
         hs, src = self.transformer(src, pos_src, tokens)

@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from typing import Any, Optional, Tuple, Type
+from typing import Any, Optional, Tuple, Type, Union
 
 from .common import LayerNorm2d
 
@@ -58,6 +58,8 @@ class PromptEncoder(nn.Module):
             nn.Conv2d(mask_in_chans, embed_dim, kernel_size=1),
         )
         self.no_mask_embed = nn.Embedding(1, embed_dim)
+
+        self._export = False
 
     def get_dense_pe(self) -> torch.Tensor:
         """
@@ -168,7 +170,10 @@ class PromptEncoder(nn.Module):
                 bs, -1, self.image_embedding_size[0], self.image_embedding_size[1]
             )
 
-        return sparse_embeddings, dense_embeddings
+        if self._export:
+            return sparse_embeddings, dense_embeddings, self.get_dense_pe()
+        else:
+            return sparse_embeddings, dense_embeddings
 
 
 class PositionEmbeddingRandom(nn.Module):
@@ -194,9 +199,12 @@ class PositionEmbeddingRandom(nn.Module):
         # outputs d_1 x ... x d_n x C shape
         return torch.cat([torch.sin(coords), torch.cos(coords)], dim=-1)
 
-    def forward(self, size: Tuple[int, int]) -> torch.Tensor:
+    def forward(self, size: Union[Tuple[int, int], torch.Tensor]) -> torch.Tensor:
         """Generate positional encoding for a grid of the specified size."""
-        h, w = size
+        if isinstance(size, tuple):
+            h, w = size
+        else:
+            h, w = size[0], size[1]
         device: Any = self.positional_encoding_gaussian_matrix.device
         grid = torch.ones((h, w), device=device, dtype=torch.float32)
         y_embed = grid.cumsum(dim=0) - 0.5
