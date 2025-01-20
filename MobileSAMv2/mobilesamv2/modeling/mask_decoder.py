@@ -53,9 +53,9 @@ class MaskDecoder(nn.Module):
         self.output_upscaling = nn.Sequential(
             nn.ConvTranspose2d(transformer_dim, transformer_dim // 4, kernel_size=2, stride=2),
             LayerNorm2d(transformer_dim // 4),
-            activation(),
+            activation(approximate='tanh'),
             nn.ConvTranspose2d(transformer_dim // 4, transformer_dim // 8, kernel_size=2, stride=2),
-            activation(),
+            activation(approximate='tanh'),
         )
         self.output_hypernetworks_mlps = nn.ModuleList(
             [
@@ -68,6 +68,9 @@ class MaskDecoder(nn.Module):
             transformer_dim, iou_head_hidden_dim, self.num_mask_tokens, iou_head_depth
         )
         # self.mask_han=None
+
+        self._export = False
+
     @torch.jit.ignore
     def _get_slice(self, flag):
         if flag:
@@ -125,12 +128,22 @@ class MaskDecoder(nn.Module):
         # if isinstance(multimask_output, torch.Tensor):
         #     multimask_output.to(torch.bool)
 
-        if multimask_output:
-            masks = masks[:, 1:, :, :]
-            iou_pred = iou_pred[:, 1:]
+        if self._export:
+            mask_split = torch.split(masks, 1, 1)
+            iou_split = torch.split(iou_pred, 1, 1)
+            if multimask_output:
+                masks = torch.cat(mask_split[1:], 1)
+                iou_pred = torch.cat(iou_split[1:], 1)
+            else:
+                masks = mask_split[0]
+                iou_pred = iou_split[0]
         else:
-            masks = masks[:, 0:1, :, :]
-            iou_pred = iou_pred[:, 0:1]
+            if multimask_output:
+                masks = masks[:, 1:, :, :]
+                iou_pred = iou_pred[:, 1:]
+            else:
+                masks = masks[:, 0:1, :, :]
+                iou_pred = iou_pred[:, 0:1]
             # masks = masks[:,0,:,:].unsqueeze(1)
             # iou_pred = iou_pred[:, 0].unsqueeze(1)
 
@@ -143,8 +156,17 @@ class MaskDecoder(nn.Module):
         #     mask_slice = slice(0, 1)
         # masks = masks[:, mask_slice, :, :]
         # iou_pred = iou_pred[:, mask_slice]
-
-        return masks, iou_pred
+        if self._export:
+            # 1,1,256,256
+            masks = F.interpolate(
+                masks,
+                (1024, 1024),
+                mode="bilinear",
+                align_corners=False,
+            )
+            return torch.permute(masks,(0,2,3,1))
+        else:
+            return masks, iou_pred
 
     def predict_masks(
         self,
@@ -155,11 +177,18 @@ class MaskDecoder(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Predicts masks. See 'forward' for more details."""
         # Concatenate output tokens
-        output_tokens = torch.cat([self.iou_token.weight, self.mask_tokens.weight], dim=0)
+        if self._export:
+            output_tokens = (torch.cat([self.iou_token.weight, self.mask_tokens.weight], dim=0)).unsqueeze(0) # (1, 1, 2, 256) 
+        else:
+            output_tokens = torch.cat([self.iou_token.weight, self.mask_tokens.weight], dim=0)
         
         print(f"{sparse_prompt_embeddings.shape=}")
-        output_tokens = output_tokens.unsqueeze(0).expand(sparse_prompt_embeddings.size(0), -1, -1)
-        tokens = torch.cat((output_tokens, sparse_prompt_embeddings), dim=1)
+        if self._export:
+            output_tokens = output_tokens.unsqueeze(0).expand(sparse_prompt_embeddings.size(0), -1, -1, -1)
+            tokens = torch.cat((output_tokens, sparse_prompt_embeddings), dim=2).squeeze(1)
+        else:
+            output_tokens = output_tokens.unsqueeze(0).expand(sparse_prompt_embeddings.size(0), -1, -1)
+            tokens = torch.cat((output_tokens, sparse_prompt_embeddings), dim=1)
 
         print(f"{image_embeddings.device=}")
         print(f"{tokens.device=}")
@@ -178,19 +207,44 @@ class MaskDecoder(nn.Module):
         b, c, h, w = src.shape
 
         hs, src = self.transformer(src, pos_src, tokens)
-        iou_token_out = hs[:, 0, :]
-        mask_tokens_out = hs[:, 1 : (1 + self.num_mask_tokens), :]
+        if self._export:
+            hs_split = torch.split(hs, 1, 1)
+            iou_token_out = hs_split[0].squeeze(1)
+            mask_tokens_out = torch.cat(hs_split[1: 1 + self.num_mask_tokens], 1)
+        else:
+            iou_token_out = hs[:, 0, :]
+            mask_tokens_out = hs[:, 1 : (1 + self.num_mask_tokens), :]
 
         # Upscale mask embeddings and predict masks using the mask tokens
-        src = src.transpose(1, 2).view(b, c, h, w)
+        if self._export:
+            # src is (b n c)
+
+            # src_list = torch.split(src, 1, 2) # each b n 1
+            # new_src_list = []
+            # for i in range(len(src_list)):
+            #     new_src_list.append(src_list[i].squeeze(-1).reshape((b, h, w)))
+            # src = torch.stack(new_src_list, 1)
+
+            src = src.reshape((b, h, w, c))
+            src = src.permute((0,3,1,2)) # THIS NEEDS TO NOT HAPPEN IN TFLITE CONVERSION
+            # src = src.permute((0,2,1)).reshape((b, c, h, w))
+        else:
+            src = src.transpose(1, 2).view(b, c, h, w)
         upscaled_embedding = self.output_upscaling(src)
         hyper_in_list: List[torch.Tensor] = []
         # import pdb;pdb.set_trace()
-        for i in range(self.num_mask_tokens):
-            hyper_in_list.append(self.output_hypernetworks_mlps[i](mask_tokens_out[:, i, :]))
+        if self._export:
+            mask_splits = torch.split(mask_tokens_out, 1, 1)
+            for i in range(self.num_mask_tokens):
+                hyper_in_list.append(self.output_hypernetworks_mlps[i](mask_splits[i].squeeze(1)))
+        else:
+            for i in range(self.num_mask_tokens):
+                hyper_in_list.append(self.output_hypernetworks_mlps[i](mask_tokens_out[:, i, :]))
         hyper_in = torch.stack(hyper_in_list, dim=1)
         b, c, h, w = upscaled_embedding.shape
-        masks = (hyper_in @ upscaled_embedding.view(b, c, h * w)).view(b, -1, h, w)
+        # masks = (hyper_in @ upscaled_embedding.view(b, c, h * w)).view(b, -1, h, w)
+        masks = torch.bmm(hyper_in, upscaled_embedding.reshape((b, c, -1)))
+        masks = masks.reshape((b, -1, h, w))
         # import pdb;pdb.set_trace()
         # Generate mask quality predictions
         iou_pred = self.iou_prediction_head(iou_token_out)

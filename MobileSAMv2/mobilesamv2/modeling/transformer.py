@@ -80,8 +80,12 @@ class TwoWayTransformer(nn.Module):
         """
         # BxCxHxW -> BxHWxC == B x N_image_tokens x C
         bs, c, h, w = image_embedding.shape
-        image_embedding = image_embedding.flatten(2).permute(0, 2, 1) #torch.Size([1, 4096, 256])
-        image_pe = image_pe.flatten(2).permute(0, 2, 1) #torch.Size([1, 4096, 256])
+        
+        # image_embedding = image_embedding.flatten(2).permute(0, 2, 1) #torch.Size([1, 4096, 256])
+        # image_pe = image_pe.flatten(2).permute(0, 2, 1) #torch.Size([1, 4096, 256])
+        
+        image_embedding = torch.permute(image_embedding, (0,2,3,1)).reshape((bs, -1, c))
+        image_pe = torch.permute(image_pe, (0,2,3,1)).reshape((bs, -1, c))
         # import pdb;pdb.set_trace()
         # Prepare queries
         queries = point_embedding
@@ -208,11 +212,13 @@ class Attention(nn.Module):
     def _separate_heads(self, x: Tensor, num_heads: int) -> Tensor:
         b, n, c = x.shape
         x = x.reshape(b, n, num_heads, c // num_heads)
-        return x.transpose(1, 2)  # B x N_heads x N_tokens x C_per_head
+        # return x.transpose(1, 2)  # B x N_heads x N_tokens x C_per_head
+        return torch.permute(x, (0, 2, 1, 3))
 
     def _recombine_heads(self, x: Tensor) -> Tensor:
         b, n_heads, n_tokens, c_per_head = x.shape
-        x = x.transpose(1, 2)
+        # x = x.transpose(1, 2)
+        x = torch.permute(x, (0, 2, 1, 3))
         return x.reshape(b, n_tokens, n_heads * c_per_head)  # B x N_tokens x C
 
     def forward(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:

@@ -98,8 +98,12 @@ class PromptEncoder(nn.Module):
         boxes = boxes + 0.5  # Shift to center of pixel
         coords = boxes.reshape(-1, 2, 2)
         corner_embedding = self.pe_layer.forward_with_coords(coords, self.input_image_size)
-        corner_embedding[:, 0, :] += self.point_embeddings[2].weight
-        corner_embedding[:, 1, :] += self.point_embeddings[3].weight
+        # corner_embedding[:, 0, :] += self.point_embeddings[2].weight
+        # corner_embedding[:, 1, :] += self.point_embeddings[3].weight
+        corner_embedding_x, corner_embedding_y = torch.split(corner_embedding, 1, 1)
+        corner_embedding_x = corner_embedding_x + self.point_embeddings[2].weight.unsqueeze(1)
+        corner_embedding_y = corner_embedding_y + self.point_embeddings[3].weight.unsqueeze(1)
+        corner_embedding = torch.cat([corner_embedding_x,corner_embedding_y],1)
         return corner_embedding
 
     def _embed_masks(self, masks: torch.Tensor) -> torch.Tensor:
@@ -171,7 +175,7 @@ class PromptEncoder(nn.Module):
             )
 
         if self._export:
-            return sparse_embeddings, dense_embeddings, self.get_dense_pe()
+            return sparse_embeddings.unsqueeze(1), dense_embeddings # , self.get_dense_pe()
         else:
             return sparse_embeddings, dense_embeddings
 
@@ -194,7 +198,14 @@ class PositionEmbeddingRandom(nn.Module):
         """Positionally encode points that are normalized to [0,1]."""
         # assuming coords are in [0, 1]^2 square and have d_1 x ... x d_n x 2 shape
         coords = 2 * coords - 1
-        coords = coords @ self.positional_encoding_gaussian_matrix
+        # coords = coords @ self.positional_encoding_gaussian_matrix
+        pe_mat = self.positional_encoding_gaussian_matrix.unsqueeze(0)
+        # print(f"{coords.shape=}")
+        # print(f"{pe_mat.shape=}")
+        d1, d2, d3 = coords.shape
+        coords = coords.reshape((1, -1, d3))
+        coords = torch.bmm(coords, pe_mat)
+        coords = coords.reshape((d1, d2, -1))
         coords = 2 * np.pi * coords
         # outputs d_1 x ... x d_n x C shape
         return torch.cat([torch.sin(coords), torch.cos(coords)], dim=-1)
@@ -212,7 +223,7 @@ class PositionEmbeddingRandom(nn.Module):
         y_embed = y_embed / h
         x_embed = x_embed / w
 
-        pe = self._pe_encoding(torch.stack([x_embed, y_embed], dim=-1))
+        pe = self._pe_encoding(torch.stack([x_embed, y_embed], dim=-1)) # coords (64,64,2)
         return pe.permute(2, 0, 1)  # C x H x W
 
     def forward_with_coords(
@@ -220,6 +231,10 @@ class PositionEmbeddingRandom(nn.Module):
     ) -> torch.Tensor:
         """Positionally encode points that are not normalized to [0,1]."""
         coords = coords_input.clone()
-        coords[:, :, 0] = coords[:, :, 0] / image_size[1]
-        coords[:, :, 1] = coords[:, :, 1] / image_size[0]
+        # coords[:, :, 0] = coords[:, :, 0] / image_size[1]
+        # coords[:, :, 1] = coords[:, :, 1] / image_size[0]
+        coords_y, coords_x = torch.split(coords, 1, 2)
+        coords_y = coords_y / image_size[1]
+        coords_x = coords_x / image_size[1]
+        coords = torch.cat([coords_y, coords_x], 2)
         return self._pe_encoding(coords.to(torch.float))  # B x N x C

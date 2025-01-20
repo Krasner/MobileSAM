@@ -14,7 +14,8 @@ __all__ = ["LayerNorm2d", "build_norm", "reset_bn", "set_norm_eps"]
 class LayerNorm2d(nn.LayerNorm):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         out = x - torch.mean(x, dim=1, keepdim=True)
-        out = out / torch.sqrt(torch.square(out).mean(dim=1, keepdim=True) + self.eps)
+        square_out = out * out
+        out = out / torch.sqrt(square_out.mean(dim=1, keepdim=True) + self.eps)
         if self.elementwise_affine:
             out = out * self.weight.view(1, -1, 1, 1) + self.bias.view(1, -1, 1, 1)
         return out

@@ -80,7 +80,7 @@ class ConvLayer(nn.Module):
 class UpSampleLayer(nn.Module):
     def __init__(
         self,
-        mode="bicubic",
+        mode="bilinear", # "bicubic",
         size: int or tuple[int, int] or list[int] or None = None,
         factor=2,
         align_corners=False,
@@ -92,7 +92,9 @@ class UpSampleLayer(nn.Module):
         self.align_corners = align_corners
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if (self.size is not None and tuple(x.shape[-2:]) == self.size) or self.factor == 1:
+        # if (self.size is not None and tuple(x.shape[-2:]) == self.size) or self.factor == 1:
+        #     return x
+        if ((self.size is not None) and (x.shape[-2] == self.size[0]) and (x.shape[-1] == self.size[1])) or self.factor == 1:
             return x
         return resize(x, self.size, self.factor, self.mode, self.align_corners)
 
@@ -408,7 +410,8 @@ class LiteMLA(nn.Module):
                 H * W,
             ),
         )
-        qkv = torch.transpose(qkv, -1, -2)
+        # qkv = torch.transpose(qkv, -1, -2)
+        qkv = torch.permute(qkv, (0, 1, 3, 2))
         q, k, v = (
             qkv[..., 0 : self.dim],
             qkv[..., self.dim : 2 * self.dim],
@@ -420,14 +423,16 @@ class LiteMLA(nn.Module):
         k = self.kernel_func(k)
 
         # linear matmul
-        trans_k = k.transpose(-1, -2)
+        # trans_k = k.transpose(-1, -2)
+        trans_k = torch.permute(k, (0, 1, 3, 2))
 
         v = F.pad(v, (0, 1), mode="constant", value=1)
         kv = torch.matmul(trans_k, v)
         out = torch.matmul(q, kv)
         out = out[..., :-1] / (out[..., -1:] + self.eps)
 
-        out = torch.transpose(out, -1, -2)
+        # out = torch.transpose(out, -1, -2)
+        out = torch.permute(out, (0, 1, 3, 2))
         out = torch.reshape(out, (B, -1, H, W))
         return out
 

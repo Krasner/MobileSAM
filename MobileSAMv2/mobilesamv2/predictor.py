@@ -87,6 +87,7 @@ class SamPredictor:
         # import time
         # aa = time.time()
         self.features = self.model.image_encoder(input_image)
+        self._last_image = input_image
         # cc = time.time()
         # print(cc-aa, ',')
         # import pdb;pdb.set_trace()
