@@ -60,7 +60,12 @@ class PromptEncoder(nn.Module):
         self.no_mask_embed = nn.Embedding(1, embed_dim)
 
         self._export = False
-
+        self.pe_layer._export = False
+    
+    def set_export(self, val):
+        self._export = val
+        self.pe_layer._export = val
+        
     def get_dense_pe(self) -> torch.Tensor:
         """
         Returns the positional encoding used to encode point prompts,
@@ -193,19 +198,30 @@ class PositionEmbeddingRandom(nn.Module):
             "positional_encoding_gaussian_matrix",
             scale * torch.randn((2, num_pos_feats)),
         )
+        self._export = False
 
     def _pe_encoding(self, coords: torch.Tensor) -> torch.Tensor:
         """Positionally encode points that are normalized to [0,1]."""
+        d1, d2, d3 = coords.shape
+
         # assuming coords are in [0, 1]^2 square and have d_1 x ... x d_n x 2 shape
         coords = 2 * coords - 1
-        # coords = coords @ self.positional_encoding_gaussian_matrix
-        pe_mat = self.positional_encoding_gaussian_matrix.unsqueeze(0)
-        # print(f"{coords.shape=}")
-        # print(f"{pe_mat.shape=}")
-        d1, d2, d3 = coords.shape
-        coords = coords.reshape((1, -1, d3))
-        coords = torch.bmm(coords, pe_mat)
-        coords = coords.reshape((d1, d2, -1))
+        if not self._export:
+            coords = coords @ self.positional_encoding_gaussian_matrix
+        else:
+            if d1 > 1:
+                pe_mat = self.positional_encoding_gaussian_matrix.unsqueeze(0)
+                # print(f"{coords.shape=}")
+                # print(f"{pe_mat.shape=}")
+                coords = coords.reshape((d1, -1, d3))
+                coords = torch.bmm(coords, pe_mat)
+                coords = coords.reshape((d1, d2, -1))
+            else:
+                # coords = coords.reshape((d2, d3))
+                coords = coords.squeeze(0)
+                coords = coords @ self.positional_encoding_gaussian_matrix
+                # coords = coords.reshape((d1, d2, -1))
+                coords = coords.unsqueeze(0)
         coords = 2 * np.pi * coords
         # outputs d_1 x ... x d_n x C shape
         return torch.cat([torch.sin(coords), torch.cos(coords)], dim=-1)
